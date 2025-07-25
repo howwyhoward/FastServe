@@ -1,0 +1,175 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual environments
+fastserve_env/
+venv/
+env/
+ENV/
+
+# IDEs and editors
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon
+._*
+.DocumentRevisions-V100
+.fseventsd
+.Spotlight-V100
+.TemporaryItems
+.Trashes
+.VolumeIcon.icns
+.com.apple.timemachine.donotpresent
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+*.cab
+*.msi
+*.msix
+*.msm
+*.msp
+*.lnk
+
+# Linux
+*~
+
+# Logs
+*.log
+logs/
+
+# Runtime data
+pids
+*.pid
+*.seed
+*.pid.lock
+
+# Coverage directory used by tools like istanbul
+coverage/
+*.lcov
+
+# nyc test coverage
+.nyc_output
+
+# Dependency directories
+node_modules/
+
+# Optional npm cache directory
+.npm
+
+# Optional REPL history
+.node_repl_history
+
+# Output of 'npm pack'
+*.tgz
+
+# Yarn Integrity file
+.yarn-integrity
+
+# dotenv environment variables file
+.env
+.env.test
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Temporary files
+*.tmp
+*.temp
+
+# Parent directory files (ignore anything outside project)
+../
+
+# System and user-specific files
+.CFUserTextEncoding
+.bash_history
+.bash_profile*
+.bash_sessions/
+.bashrc*
+.zsh_history
+.zsh_sessions/
+.zshrc*
+.profile
+.viminfo
+.lesshst
+.psql_history
+
+# Development tools and environments
+.anaconda/
+.conda/
+.condarc
+.cache/
+.config/
+.local/
+.jupyter/
+.ipython/
+.npm/
+.nvm/
+.gradle/
+.cabal/
+.stack/
+.ghcup/
+.docker/
+.cursor/
+.vscode/
+.ollama/
+
+# Application directories that shouldn't be in project
+AndroidStudioProjects/
+Applications/
+Desktop/
+Documents/
+Downloads/
+Pictures/
+Music/
+Movies/
+Library/
+Public/
+VirtualBox VMs/
+Zotero/
+
+# Specific unwanted directories
+Creative Cloud Files/
+iCloud Drive*/
+anaconda3/
+miniforge3/
+oh-my-zsh/
+
+# Misc
+*.cfg
+package-lock.json
+
+# FastServe specific
+*.pyc
+.pytest_cache/ 
