@@ -68,6 +68,8 @@ class InferenceJob:
     preemption_count: int = 0
     queue_time: float = 0.0
     execution_time: float = 0.0
+    retry_count: int = 0
+    max_retries: int = 3
     
     # Job profiling data
     profile: Optional[Any] = None  # Will store JobProfile from job_profiler

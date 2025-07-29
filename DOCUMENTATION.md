@@ -2,6 +2,25 @@
 
 **Fast AI Text Generation Server with Smart Scheduling**
 
+```bash
+# 🔧 Quick Port Management Commands
+# Stop any process using port 8000:
+lsof -i :8000                                    # Check what's using port 8000
+pkill -f "python main.py"                       # Kill FastServe by process name
+# OR: kill <PID>                                # Kill by specific process ID
+
+# Start FastServe server:
+source fastserve_env/bin/activate && python main.py --disable-preemption --max-new-tokens 50 --log-level INFO
+
+# Check server health:
+curl -s http://localhost:8000/health | python -m json.tool
+
+# Additional useful commands:
+ps aux | grep "python main.py"                  # List all FastServe processes
+killall -9 python                              # Force kill all Python processes (use with caution!)
+netstat -an | grep :8000                       # Check port 8000 status (alternative to lsof)
+```
+
 ---
 
 ## 🎯 What is FastServe?
@@ -32,6 +51,7 @@ source fastserve_env/bin/activate
 python main.py
 ```
 *Server starts on http://localhost:8000*
+Stop: lsof -i :8000
 
 ### 3. Test It Works
 ```bash

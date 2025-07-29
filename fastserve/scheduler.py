@@ -172,6 +172,17 @@ class SkipJoinMLFQScheduler:
             if not queue.is_empty():
                 job = queue.dequeue()
                 if job:
+                    # Skip jobs that are already marked as failed to prevent infinite loops
+                    if job.status == JobStatus.FAILED:
+                        logger.debug(f"Skipping failed job {job.job_id}")
+                        continue
+                    
+                    # Check retry limit to prevent infinite retry loops
+                    if job.retry_count >= job.max_retries:
+                        job.update_status(JobStatus.FAILED)
+                        logger.warning(f"Job {job.job_id} exceeded retry limit ({job.max_retries}), marking as failed")
+                        continue
+                        
                     job.update_status(JobStatus.RUNNING)
                     self.current_job = job
                     self.current_queue_id = queue.queue_id
@@ -180,7 +191,7 @@ class SkipJoinMLFQScheduler:
                     # Update statistics
                     self.queue_stats[queue.queue_id]['jobs_processed'] += 1
                     
-                    logger.debug(f"Selected job {job.job_id} from queue {queue.queue_id}")
+                    logger.debug(f"Selected job {job.job_id} from queue {queue.queue_id} (retry {job.retry_count})")
                     return job
         
         return None
@@ -222,12 +233,23 @@ class SkipJoinMLFQScheduler:
         job = self.current_job
         job.update_status(JobStatus.PREEMPTED)
         
+        # Increment retry count when requeuing
+        job.retry_count += 1
+        
+        # Check if job has exceeded retry limit
+        if job.retry_count >= job.max_retries:
+            job.update_status(JobStatus.FAILED)
+            logger.warning(f"Job {job.job_id} exceeded retry limit ({job.max_retries}), marking as failed")
+            self.current_job = None
+            self.current_queue_id = 0
+            return
+        
         # Determine where to place the preempted job
         target_queue_id = self._get_demotion_queue(job)
         
         # Place job back in appropriate queue
         if self.queues[target_queue_id].enqueue(job):
-            logger.info(f"Job {job.job_id} preempted and moved to queue {target_queue_id}")
+            logger.info(f"Job {job.job_id} preempted and moved to queue {target_queue_id} (retry {job.retry_count})")
             
             # Update statistics
             self.total_preemptions += 1

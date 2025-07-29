@@ -10,7 +10,7 @@ from contextlib import asynccontextmanager
 from typing import Dict, Any, Optional
 import uvicorn
 from fastapi import FastAPI, HTTPException, BackgroundTasks
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, HTMLResponse
 import json
 
 from .models import (
@@ -152,6 +152,7 @@ class FastServeServer:
         # Check completed jobs
         if job_id in self.completed_jobs:
             job = self.completed_jobs[job_id]
+            logger.debug(f"Job {job_id} found in completed jobs")
             return GenerationResponse(
                 job_id=job.job_id,
                 generated_text=job.generated_text,
@@ -164,20 +165,31 @@ class FastServeServer:
         
         # Check failed jobs
         if job_id in self.failed_jobs:
-            raise HTTPException(status_code=500, detail="Job failed during processing")
+            job = self.failed_jobs[job_id]
+            error_msg = f"Job failed during processing. Status: {job.status.value}, Retries: {job.retry_count}"
+            logger.error(f"Job {job_id} failed: {error_msg}")
+            raise HTTPException(status_code=500, detail=error_msg)
         
         # Check active jobs
         if job_id in self.active_jobs:
             job = self.active_jobs[job_id]
+            logger.debug(f"Job {job_id} status: {job.status.value}, tokens: {job.total_tokens_generated}")
+            
             if job.status == JobStatus.COMPLETED:
                 # Move to completed jobs
                 self.completed_jobs[job_id] = job
                 del self.active_jobs[job_id]
                 return await self.get_generation_result(job_id)
+            elif job.status == JobStatus.FAILED:
+                # Move to failed jobs
+                self.failed_jobs[job_id] = job
+                del self.active_jobs[job_id]
+                return await self.get_generation_result(job_id)
             else:
-                raise HTTPException(status_code=202, detail="Job still processing")
+                # Still processing
+                raise HTTPException(status_code=202, detail=f"Job still processing (status: {job.status.value})")
         
-        # Job not found
+        # Job not found anywhere
         raise HTTPException(status_code=404, detail="Job not found")
     
     async def generate_text_streaming(self, request: GenerationRequest):
@@ -349,24 +361,36 @@ async def generate_text(request: GenerationRequest, background_tasks: Background
     """Generate text (non-streaming)"""
     job_id = await server_instance.submit_generation_request(request)
     
-    # For non-streaming, we wait for completion
-    # In a real implementation, you might return the job_id and let client poll
-    max_wait_time = 60.0  # Maximum wait time in seconds
+    # For non-streaming, we wait for completion with improved timeout handling
+    max_wait_time = 120.0  # Increased to 2 minutes for complex prompts
     start_time = time.time()
+    poll_interval = 0.2  # Check more frequently
+    
+    logger.info(f"Waiting for job {job_id} completion (max {max_wait_time}s)")
     
     while (time.time() - start_time) < max_wait_time:
         try:
-            return await server_instance.get_generation_result(job_id)
+            result = await server_instance.get_generation_result(job_id)
+            elapsed = time.time() - start_time
+            logger.info(f"Job {job_id} completed successfully in {elapsed:.2f}s")
+            return result
         except HTTPException as e:
             if e.status_code == 202:  # Still processing
-                await asyncio.sleep(0.5)
+                await asyncio.sleep(poll_interval)
                 continue
+            elif e.status_code == 404:  # Job not found - may have failed
+                logger.warning(f"Job {job_id} not found, may have failed")
+                raise HTTPException(status_code=500, detail="Job processing failed")
             else:
                 raise
         except Exception as e:
+            logger.error(f"Error checking job {job_id}: {e}")
             raise HTTPException(status_code=500, detail=str(e))
     
-    raise HTTPException(status_code=408, detail="Request timeout")
+    # Timeout occurred
+    elapsed = time.time() - start_time
+    logger.warning(f"Job {job_id} timed out after {elapsed:.2f}s")
+    raise HTTPException(status_code=408, detail=f"Request timeout after {max_wait_time}s")
 
 
 @app.post("/generate/stream")
@@ -427,14 +451,8 @@ async def health_check():
 
 @app.get("/")
 async def root():
-    """Root endpoint with API information"""
-    return {
-        "message": "FastServe - Fast Distributed Inference Serving for Large Language Models",
-        "version": "1.0.0",
-        "status": "running" if server_instance.is_running else "stopped",
-        "docs": "/docs",
-        "health": "/health"
-    }
+    """Render the main web interface"""
+    return HTMLResponse(content=open('templates/index.html').read(), status_code=200)
 
 
 def run_server(host: str = None, port: int = None, **kwargs):

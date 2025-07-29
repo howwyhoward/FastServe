@@ -102,15 +102,19 @@ class InferenceEngine:
             logger.info(f"Loading model: {model_name}")
             
             # Load tokenizer
-            self.tokenizer = AutoTokenizer.from_pretrained(
-                model_name,
-                trust_remote_code=True,
-                padding_side='left'
-            )
+            self.tokenizer = AutoTokenizer.from_pretrained(model_name)
             
-            # Set pad token if not exists
+            # Set up pad token properly for DialoGPT and similar models
             if self.tokenizer.pad_token is None:
                 self.tokenizer.pad_token = self.tokenizer.eos_token
+                logger.info(f"Set pad_token to eos_token for model {model_name}")
+            
+            # Ensure we have proper token IDs
+            if self.tokenizer.pad_token_id is None:
+                self.tokenizer.pad_token_id = self.tokenizer.eos_token_id
+                logger.info(f"Set pad_token_id to eos_token_id for model {model_name}")
+            
+            logger.info(f"Tokenizer config: eos_token_id={self.tokenizer.eos_token_id}, pad_token_id={self.tokenizer.pad_token_id}")
             
             # Load model with Mac M2 optimizations
             model_kwargs = {
@@ -144,11 +148,16 @@ class InferenceEngine:
                 temperature=0.7,
                 top_p=0.9,
                 top_k=50,
-                pad_token_id=self.tokenizer.eos_token_id,
+                pad_token_id=self.tokenizer.pad_token_id,
                 eos_token_id=self.tokenizer.eos_token_id,
                 use_cache=True,
                 return_dict_in_generate=True,
-                output_scores=True
+                output_scores=True,
+                repetition_penalty=1.1,  # Avoid repetitive generation
+                no_repeat_ngram_size=2,  # Avoid repeating n-grams
+                early_stopping=True,  # Stop when eos_token is generated
+                min_new_tokens=1,  # Ensure at least one token is generated
+                max_time=30.0  # Maximum generation time in seconds
             )
             
             self.is_model_loaded = True
@@ -224,6 +233,8 @@ class InferenceEngine:
             # Generate tokens incrementally
             generated_tokens = []
             generation_complete = False
+            consecutive_empty_generations = 0
+            max_empty_generations = 3  # Fail after 3 consecutive empty generations
             
             while not generation_complete and len(generated_tokens) < job.max_new_tokens:
                 # Reset preemption criteria for each step
@@ -231,39 +242,64 @@ class InferenceEngine:
                 
                 # Generate next token(s)
                 with torch.no_grad():
-                    outputs = self.model.generate(
-                        input_ids=inputs['input_ids'],
-                        attention_mask=inputs.get('attention_mask'),
-                        past_key_values=past_key_values,
-                        max_new_tokens=min(5, job.max_new_tokens - len(generated_tokens)),  # Small batches
-                        temperature=job.temperature,
-                        top_p=job.top_p,
-                        top_k=job.top_k,
-                        do_sample=job.do_sample,
-                        pad_token_id=self.tokenizer.pad_token_id,
-                        eos_token_id=self.tokenizer.eos_token_id,
-                        stopping_criteria=stopping_criteria,
-                        use_cache=True,
-                        return_dict_in_generate=True,
-                        output_scores=True
-                    )
+                    try:
+                        outputs = self.model.generate(
+                            input_ids=inputs['input_ids'],
+                            attention_mask=inputs.get('attention_mask'),
+                            max_new_tokens=min(3, job.max_new_tokens - len(generated_tokens)),  # Even smaller batches
+                            temperature=job.temperature,
+                            top_p=job.top_p,
+                            top_k=job.top_k,
+                            do_sample=job.do_sample,
+                            pad_token_id=self.tokenizer.pad_token_id,
+                            eos_token_id=self.tokenizer.eos_token_id,
+                            use_cache=True,
+                            return_dict_in_generate=True
+                        )
+                    except Exception as e:
+                        logger.error(f"Model.generate() failed for job {job.job_id}: {e}")
+                        logger.error(f"Input shape: {inputs['input_ids'].shape}, Device: {inputs['input_ids'].device}")
+                        raise e
                 
                 # Extract new tokens with bounds checking
                 original_length = inputs['input_ids'].size(-1)
+                
+                # Debug logging
+                logger.debug(f"Job {job.job_id}: Original input length: {original_length}")
+                logger.debug(f"Job {job.job_id}: Output sequences count: {len(outputs.sequences)}")
+                if len(outputs.sequences) > 0:
+                    logger.debug(f"Job {job.job_id}: First sequence shape: {outputs.sequences[0].shape}")
+                
+                # Check if outputs.sequences is empty or malformed
+                if len(outputs.sequences) == 0:
+                    logger.warning(f"Empty sequences returned for job {job.job_id}, stopping generation")
+                    break
+                
                 generated_sequence = outputs.sequences[0]
+                
+                # Additional safety check
+                if generated_sequence.numel() == 0:
+                    logger.warning(f"Zero-element sequence returned for job {job.job_id}, stopping generation")
+                    break
                 
                 if generated_sequence.size(-1) > original_length:
                     new_tokens = generated_sequence[original_length:]
                     generated_tokens.extend(new_tokens.tolist())
+                    consecutive_empty_generations = 0  # Reset counter
                 else:
                     # No new tokens generated, possibly due to early stopping
                     new_tokens = torch.tensor([], dtype=torch.long, device=self.device)
-                    logger.debug(f"No new tokens generated for job {job.job_id}")
+                    consecutive_empty_generations += 1
+                    logger.debug(f"No new tokens generated for job {job.job_id} (attempt {consecutive_empty_generations})")
                 
-                # If no tokens were generated, break to avoid infinite loop
-                if len(new_tokens) == 0:
-                    logger.debug(f"Generation stopped early for job {job.job_id}")
+                # If no tokens were generated multiple times, break to avoid infinite loop
+                if consecutive_empty_generations >= max_empty_generations:
+                    logger.warning(f"Generation failed for job {job.job_id} - no tokens generated after {max_empty_generations} attempts")
                     break
+                
+                # If no tokens were generated this round, continue to next iteration
+                if len(new_tokens) == 0:
+                    continue
                 
                 # Update cache
                 if hasattr(outputs, 'past_key_values') and outputs.past_key_values:
@@ -275,8 +311,8 @@ class InferenceEngine:
                 job.total_tokens_generated = len(generated_tokens)
                 job.generated_text = self.tokenizer.decode(generated_tokens, skip_special_tokens=True)
                 
-                # Check for completion
-                if self.tokenizer.eos_token_id in new_tokens:
+                # Check for completion - only check if we have new tokens
+                if len(new_tokens) > 0 and self.tokenizer.eos_token_id in new_tokens:
                     generation_complete = True
                     logger.debug(f"Generation completed for job {job.job_id}")
                 
@@ -304,6 +340,8 @@ class InferenceEngine:
         except Exception as e:
             logger.error(f"Error generating text for job {job.job_id}: {e}")
             job.update_status(JobStatus.FAILED)
+            # Increment retry count to track failures
+            job.retry_count += 1
             return False
     
     async def run_inference_loop(self) -> None:
@@ -355,7 +393,8 @@ class InferenceEngine:
                         self.job_completion_callback(current_job, False)
                     self.scheduler.current_job = None
                 
-                await asyncio.sleep(1.0)
+                # Sleep longer to prevent tight error loops
+                await asyncio.sleep(2.0)
     
     async def generate_streaming(self, job: InferenceJob) -> AsyncIterator[str]:
         """
@@ -397,8 +436,24 @@ class InferenceEngine:
                     return_dict_in_generate=True
                 )
             
-            # Get new token
-            new_token = outputs.sequences[0][-1].item()
+            # Check if outputs.sequences is empty or malformed
+            if len(outputs.sequences) == 0:
+                logger.warning(f"Empty sequences returned for streaming job {job.job_id}, stopping")
+                break
+            
+            sequence = outputs.sequences[0]
+            if sequence.size(-1) == 0:
+                logger.warning(f"Empty sequence returned for streaming job {job.job_id}, stopping")
+                break
+                
+            # Additional safety check for the original input length
+            original_length = inputs['input_ids'].size(-1)
+            if sequence.size(-1) <= original_length:
+                logger.warning(f"No new tokens generated for streaming job {job.job_id}, stopping")
+                break
+                
+            # Get new token safely
+            new_token = sequence[-1].item()
             generated_tokens.append(new_token)
             
             # Decode and yield token

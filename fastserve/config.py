@@ -14,8 +14,8 @@ class FastServeConfig:
     """Main configuration for FastServe system"""
     
     # Model settings
-    model_name: str = "microsoft/DialoGPT-small"  # Default small model for testing
-    use_ollama: bool = False  # Set to True to use Ollama instead of HuggingFace
+    model_name: str = "gpt2"  # Test with downloaded GPT-2
+    use_ollama: bool = False  # Test HuggingFace backend first
     ollama_model: str = "deepseek-r1:14b"  # Ollama model name
     max_sequence_length: int = 1024
     max_new_tokens: int = 256
